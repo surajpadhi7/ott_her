@@ -438,7 +438,7 @@ async def handler(event):
                     return
 
             # Product detection from user message
-            products = ["netflix", "prime", "hotstar", "sony", "zee5", "voot", "mx player", "ullu", "hoichoi", "eros", "jio", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
+            products = ["netflix do", "prime do", "hotstar do", "sony do", "zee5 do", "voot do", "mx player do", "ullu do", "hoichoi do", "eros do", "jio do", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
             matched = [p for p in user_message.split() if p in products]
 
             if matched and sender_id not in user_confirm_pending:
