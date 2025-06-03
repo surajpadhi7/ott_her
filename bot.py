@@ -96,6 +96,70 @@ abuse_words = [
     "maa ki chut", "bhosda", "chut", "gaand", "lavda", "bhadwa", "jhatu", "tatti", "suar", "kutiya"
 ]
 
+# --- Short Form Corrections ---
+short_form_corrections = {
+    "kr": "kar",
+    "plz": "please",
+    "pls": "please",
+    "thx": "thanks",
+    "thnx": "thanks",
+    "u": "you",
+    "r": "are",
+    "k": "okay",
+    "ok": "okay",
+    "bhai": "bhai",
+    "bhy": "bhai",
+    "kya": "kya",
+    "kyu": "kyun",
+    "tym": "time",
+    "msg": "message",
+    "bro": "bhai",
+    "sis": "didi",
+    "dnt": "dont",
+    "wnt": "want",
+    "gud": "good",
+    "n": "and",
+    "2": "to",
+    "4": "for"
+}
+
+# --- Hindi/Hinglish Spelling Corrections ---
+hindi_corrections = {
+    "kese": "kaise",
+    "kesa": "kaisa",
+    "kyo": "kyun",
+    "bhy": "bhai",
+    "didi": "didi",
+    "shukriya": "shukriya",
+    "dhanyavaad": "dhanyavaad",
+    "meharbani": "meharbani",
+    "plz": "please",
+    "thx": "thanks",
+    "sry": "sorry",
+    "srry": "sorry",
+    "oky": "okay",
+    "okk": "okay",
+    "ky": "kya",
+    "kyu": "kyun",
+    "bht": "bahut",
+    "bohot": "bahut",
+    "thik": "theek",
+    "tik": "theek",
+    "h": "hai",
+    "hn": "haan",
+    "nahi": "nahi",
+    "nhi": "nahi",
+    "ache": "achha",
+    "acha": "achha"
+}
+
+# --- English Common Words for Spelling Correction ---
+english_common_words = [
+    "hello", "hi", "hey", "good", "morning", "evening", "night", "thanks", "thank", "you", "are", "to", "for",
+    "please", "sorry", "okay", "yes", "no", "and", "what", "how", "why", "when", "where", "time", "message",
+    "want", "dont", "need", "help", "bro", "sis", "great", "cool", "nice"
+]
+
 # --- Spam Detection Config ---
 spam_threshold = 10  # Max messages in time window
 spam_time_window = 60  # Time window in seconds
@@ -176,7 +240,7 @@ async def send_typing(event):
         ))
         await asyncio.sleep(random.uniform(1.0, 2.0))
     except Exception as e:
-        logger.error(f"Typing error: {e}")
+        logger.error(f"Typing error in chat {event.chat_id}: {str(e)}")
 
 # --- Add Reaction ---
 async def add_reaction(event, reaction_type):
@@ -190,7 +254,36 @@ async def add_reaction(event, reaction_type):
         ))
         logger.info(f"Successfully added {reaction_type} reaction: {emoji}")
     except Exception as e:
-        logger.error(f"Reaction error for {reaction_type}: {e}")
+        logger.error(f"Reaction error for {reaction_type} in chat {event.chat_id}: {str(e)}")
+
+# --- Correct Admin Message using GPT-4o ---
+async def correct_admin_message(event, user_message):
+    try:
+        # Use GPT-4o to correct spelling and grammar
+        correction_prompt = f"Correct the following message for spelling and grammar mistakes while maintaining its original tone and intent:\n\n{user_message}\n\nProvide only the corrected message without any additional text."
+        
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in messages."},
+                {"role": "user", "content": correction_prompt}
+            ],
+            temperature=0.0,
+        )
+        
+        corrected_message = response.choices[0].message.content.strip()
+        
+        # Delete the original message
+        await event.delete()
+        
+        # Send the corrected message
+        await client.send_message(event.chat_id, corrected_message)
+        logger.info(f"Admin message corrected: '{user_message}' to '{corrected_message}'")
+        
+    except Exception as e:
+        logger.error(f"Error correcting admin message in chat {event.chat_id}: {str(e)}")
+        # Fallback: don't delete or correct if GPT-4o fails
+        await client.send_message(event.chat_id, user_message)
 
 # --- Keep Always Online ---
 async def keep_online():
@@ -223,7 +316,6 @@ async def manage_sessions():
         logger.info(f"Active sessions: {len(sessions.authorizations)}")
         for session in sessions.authorizations:
             logger.info(f"Session: IP={session.ip}, Device={session.device_model}, App={session.app_name}, Date={session.date_created}")
-            # Optionally terminate other sessions to prevent logout
             if session.ip != os.getenv('CURRENT_IP', 'unknown') and session.app_name != "userbot":
                 await client(functions.account.ResetAuthorizationRequest(hash=session.hash))
                 logger.info(f"Terminated session: IP={session.ip}, Device={session.device_model}")
@@ -240,60 +332,60 @@ async def handler(event):
         sender = await event.get_sender()
         sender_id = sender.id if sender else None
         chat_id = event.chat_id
-        user_message = event.raw_text.strip().lower() if event.raw_text else ""
+        user_message = event.raw_text.strip() if event.raw_text else ""
 
         logger.info(f"Message {'sent' if event.out else 'received'}, sender_id: {sender_id}, chat_id: {chat_id}, admin_id: {admin_id}, message: {user_message}, ai_active_chats: {ai_active_chats}, force_online: {force_online}")
 
+        # Correct admin messages (independent of AI status)
+        if sender_id == admin_id and user_message:
+            await correct_admin_message(event, user_message)
+
         # Handle admin commands
         if sender_id == admin_id:
-            logger.info(f"Admin command detected: {user_message}")
-            if user_message == '/':
+            logger.info(f"Admin command detected: {user_message.lower()}")
+            user_message_lower = user_message.lower()
+            if user_message_lower == '/':
                 try:
-                    await event.delete()
                     await client.send_message(chat_id, "📋 Available commands:\n" + "\n".join(commands))
                     logger.info(f"Command suggestions sent for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling / command: {e}")
                 return
-            if user_message == '/start':
+            if user_message_lower == '/start':
                 try:
                     ai_active_chats[chat_id] = True
-                    await event.delete()
                     await client.send_message(chat_id, "✅  😎", reply_to=event.id)
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /start command: {e}")
                 return
-            if user_message == '/stop':
+            if user_message_lower == '/stop':
                 try:
                     ai_active_chats[chat_id] = False
-                    await event.delete()
                     await client.send_message(chat_id, "✅  🛑", reply_to=event.id)
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /stop command: {e}")
                 return
-            if user_message == '/online':
+            if user_message_lower == '/online':
                 try:
                     force_online = True
                     ai_active_chats[chat_id] = True
-                    await event.delete()
                     await client.send_message(chat_id, "✅", reply_to=event.id)
                     logger.info("Online command executed")
                 except Exception as e:
                     logger.error(f"Error handling /online command: {e}")
                 return
-            if user_message == '/offline':
+            if user_message_lower == '/offline':
                 try:
                     force_online = False
                     ai_active_chats[chat_id] = False
-                    await event.delete()
                     await client.send_message(chat_id, "✅", reply_to=event.id)
                     logger.info("Offline command executed")
                 except Exception as e:
                     logger.error(f"Error handling /offline command: {e}")
                 return
-            if user_message == '/del':
+            if user_message_lower == '/del':
                 try:
                     messages = await client.get_messages(chat_id, limit=100)
                     message_ids = [msg.id for msg in messages]
@@ -339,7 +431,7 @@ async def handler(event):
             user_message_count[sender_id] = {'count': 1, 'first_message_time': current_time}
 
         # Abuse Detection (works regardless of AI status)
-        message_words = user_message.split()
+        message_words = user_message.lower().split()
         for word in message_words:
             if word in abuse_words or difflib.get_close_matches(word, abuse_words, n=1, cutoff=0.8):
                 if sender_id not in user_warnings:
@@ -352,7 +444,7 @@ async def handler(event):
                         await client.send_message(chat_id, f"⚠️ Bhai, gali mat de! {warnings_left} warning baki hain, fir block ho jayega.")
                         logger.info(f"Warning {user_warnings[sender_id]} issued to user {sender_id} for abuse")
                     except Exception as e:
-                        logger.error(f"Error sending abuse warning: {e}")
+                        logger.error(f"Error sending abuse warning in chat {chat_id}: {str(e)}")
                 else:
                     try:
                         messages = await client.get_messages(chat_id, from_user=sender_id, limit=100)
@@ -365,57 +457,42 @@ async def handler(event):
                         logger.info(f"User {sender_id} blocked and messages deleted for abuse in chat {chat_id}")
                         del user_warnings[sender_id]
                     except Exception as e:
-                        logger.error(f"Error blocking/deleting for abuse: {e}")
+                        logger.error(f"Error blocking/deleting for abuse in chat {chat_id}: {str(e)}")
                         try:
                             await client.send_message(chat_id, "❌ Block/delete mein dikkat, baad mein try karo!")
                         except Exception as send_err:
-                            logger.error(f"Error sending block/delete error message: {send_err}")
+                            logger.error(f"Error sending block/delete error message in chat {chat_id}: {str(send_err)}")
                 return
 
         # Check for rules-based triggers (from rules.json)
         logger.info("Checking rules-based triggers")
         for trigger, reply in rules.items():
             logger.debug(f"Checking trigger: {trigger}")
-            if trigger in user_message:
+            if trigger in user_message.lower():
                 logger.info(f"Trigger '{trigger}' matched, sending reply: {reply}")
                 try:
                     await event.respond(reply)
                     logger.info(f"Rules-based reply sent for trigger '{trigger}'")
                 except Exception as e:
-                    logger.error(f"Error sending rules-based reply for trigger '{trigger}': {e}")
+                    logger.error(f"Error sending rules-based reply for trigger '{trigger}' in chat {chat_id}: {str(e)}")
                 return
         logger.info("No rules-based trigger matched")
 
-        # If chat is not active and not in force_online mode, ignore non-admin incoming messages
+        # If chat is not active and not in force_online mode, ignore non-admin incoming messages for AI responses
         if not ai_active_chats.get(chat_id, False) and not force_online:
-            logger.info(f"AI inactive for chat {chat_id} and not forced online, ignoring non-admin incoming message")
+            logger.info(f"AI inactive for chat {chat_id} and not forced online, ignoring non-admin incoming message for AI response")
             return
 
-        # Process non-admin incoming messages
-        logger.info("Processing non-admin message")
+        # Process non-admin incoming messages for AI response
+        logger.info("Processing non-admin message for AI response")
         try:
             await send_typing(event)
         except Exception as e:
-            logger.error(f"Error in send_typing: {e}")
-
-        # Add reactions for greetings or thanks
-        if any(word in user_message for word in greetings_words):
-            logger.info("Detected greetings message")
-            await add_reaction(event, 'greetings')
-        elif any(word in user_message for word in thanks_words):
-            logger.info("Detected thanks message")
-            await add_reaction(event, 'thanks')
-
-        if sender_id not in user_context:
-            user_context[sender_id] = []
-
-        user_context[sender_id].append({"role": "user", "content": user_message})
-        if len(user_context[sender_id]) > 10:
-            user_context[sender_id] = user_context[sender_id][-10:]
+            logger.error(f"Error in send_typing in chat {chat_id}: {str(e)}")
 
         try:
             # Confirm Handling
-            if any(word in user_message for word in confirm_words):
+            if any(word in user_message.lower() for word in confirm_words):
                 if sender_id in user_confirm_pending:
                     plan = user_confirm_pending[sender_id]
                     user_link = f'<a href="tg://user?id={sender_id}">{sender.first_name}</a>'
@@ -439,7 +516,7 @@ async def handler(event):
 
             # Product detection from user message
             products = ["netflix do", "prime do", "hotstar do", "sony do", "zee5 do", "voot do", "mx player do", "ullu do", "hoichoi do", "eros do", "jio do", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
-            matched = [p for p in user_message.split() if p in products]
+            matched = [p for p in user_message.lower().split() if p in products]
 
             if matched and sender_id not in user_confirm_pending:
                 selected_product = matched[0].capitalize()
@@ -448,7 +525,7 @@ async def handler(event):
                 return
 
             # Validity handling
-            if "6 month" in user_message or "6 months" in user_message:
+            if "6 month" in user_message.lower() or "6 months" in user_message.lower():
                 if sender_id in user_selected_product:
                     product = user_selected_product[sender_id]
                     price = "₹350" if product.lower() in ["netflix", "prime", "hotstar", "sony", "zee5", "youtube", "telegram"] else "₹300"
@@ -460,7 +537,7 @@ async def handler(event):
                     await event.respond(f"✅ 6 Months selected bhai! {price} padega, full 6 month guarantee on random mail/number. Confirm karo (haa/ok/krde).")
                     return
 
-            if "1 year" in user_message or "12 months" in user_message:
+            if "1 year" in user_message.lower() or "12 months" in user_message.lower():
                 if sender_id in user_selected_product:
                     product = user_selected_product[sender_id]
                     price = "₹500" if product.lower() in ["netflix", "prime", "hotstar", "sony", "zee5", "youtube", "telegram"] else "₹500"
@@ -488,14 +565,14 @@ async def handler(event):
             await event.respond(bot_reply)
 
         except Exception as e:
-            logger.error(f"Error: {e}")
+            logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}")
             try:
                 await event.respond("Bhai thoda error aagaya 😔 Try later.")
             except Exception as send_err:
-                logger.error(f"Error sending error message: {send_err}")
+                logger.error(f"Error sending AI error message in chat {chat_id}: {str(send_err)}")
 
     except Exception as e:
-        logger.error(f"Error in message handler: {e}")
+        logger.error(f"Error in message handler in chat {chat_id}: {str(e)}")
 
 # --- Start Client ---
 try:
