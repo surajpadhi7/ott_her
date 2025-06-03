@@ -6,7 +6,8 @@ import os
 import logging
 from telethon import TelegramClient, events, functions, types
 from openai import OpenAI
-from dotenv import load_dotenvimport asyncio
+from dotenv import load_dotenv
+import asyncio
 import random
 import json
 import time
