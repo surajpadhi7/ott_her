@@ -6,8 +6,11 @@ import difflib
 import os
 import logging
 from telethon import TelegramClient, events, functions, types
+from telethon.errors import AuthKeyDuplicatedError
 from openai import OpenAI
+from openai import OpenAIError
 from dotenv import load_dotenv
+import aiohttp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -61,7 +64,8 @@ except Exception as e:
     logger.error(f"Error initializing OpenAI client: {e}")
     raise
 
-session_name = "userbot"
+# Use a unique session name for Railway to avoid conflicts
+session_name = "userbot_railway"
 client = TelegramClient(session_name, api_id, api_hash)
 
 # --- Load Rules from rules.json ---
@@ -256,34 +260,45 @@ async def add_reaction(event, reaction_type):
     except Exception as e:
         logger.error(f"Reaction error for {reaction_type} in chat {event.chat_id}: {str(e)}")
 
-# --- Correct Admin Message using GPT-4o ---
+# --- Correct Admin Message using GPT-4o with Retry Logic ---
 async def correct_admin_message(event, user_message):
-    try:
-        # Use GPT-4o to correct spelling and grammar
-        correction_prompt = f"Correct the following message for spelling and grammar mistakes while maintaining its original tone and intent:\n\n{user_message}\n\nProvide only the corrected message without any additional text."
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Use GPT-4o to correct spelling and grammar
+            correction_prompt = f"Correct the following message for spelling and grammar mistakes while maintaining its original tone and intent:\n\n{user_message}\n\nProvide only the corrected message without any additional text."
+            
+            response = openai.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in messages."},
+                    {"role": "user", "content": correction_prompt}
+                ],
+                temperature=0.0,
+            )
+            
+            corrected_message = response.choices[0].message.content.strip()
+            
+            # Edit the original message
+            await event.edit(corrected_message)
+            logger.info(f"Admin message corrected: '{user_message}' to '{corrected_message}'")
+            return  # Success, exit the retry loop
         
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in messages."},
-                {"role": "user", "content": correction_prompt}
-            ],
-            temperature=0.0,
-        )
-        
-        corrected_message = response.choices[0].message.content.strip()
-        
-        # Delete the original message
-        await event.delete()
-        
-        # Send the corrected message
-        await client.send_message(event.chat_id, corrected_message)
-        logger.info(f"Admin message corrected: '{user_message}' to '{corrected_message}'")
-        
-    except Exception as e:
-        logger.error(f"Error correcting admin message in chat {event.chat_id}: {str(e)}")
-        # Fallback: don't delete or correct if GPT-4o fails
-        await client.send_message(event.chat_id, user_message)
+        except OpenAIError as e:
+            logger.error(f"OpenAI API error on attempt {attempt + 1}/{max_retries} in chat {event.chat_id}: {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying after {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached for OpenAI API call, skipping correction.")
+        except Exception as e:
+            logger.error(f"Error correcting admin message in chat {event.chat_id}: {str(e)}")
+            break  # Non-recoverable error, break the retry loop
+    
+    # Fallback: don't edit if correction fails
+    logger.info(f"Fallback: Keeping original admin message '{user_message}' due to repeated failures.")
 
 # --- Keep Always Online ---
 async def keep_online():
@@ -316,7 +331,7 @@ async def manage_sessions():
         logger.info(f"Active sessions: {len(sessions.authorizations)}")
         for session in sessions.authorizations:
             logger.info(f"Session: IP={session.ip}, Device={session.device_model}, App={session.app_name}, Date={session.date_created}")
-            if session.ip != os.getenv('CURRENT_IP', 'unknown') and session.app_name != "userbot":
+            if session.ip != os.getenv('CURRENT_IP', 'unknown') and session.app_name != "userbot_railway":
                 await client(functions.account.ResetAuthorizationRequest(hash=session.hash))
                 logger.info(f"Terminated session: IP={session.ip}, Device={session.device_model}")
                 await client.send_message(admin_id, f"⚠️ Terminated session from IP {session.ip} (Device: {session.device_model}) due to IP change.")
@@ -337,7 +352,7 @@ async def handler(event):
         logger.info(f"Message {'sent' if event.out else 'received'}, sender_id: {sender_id}, chat_id: {chat_id}, admin_id: {admin_id}, message: {user_message}, ai_active_chats: {ai_active_chats}, force_online: {force_online}")
 
         # Correct admin messages (independent of AI status)
-        if sender_id == admin_id and user_message:
+        if sender_id == admin_id and user_message and not user_message.startswith('/'):
             await correct_admin_message(event, user_message)
 
         # Handle admin commands
@@ -349,7 +364,7 @@ async def handler(event):
                     await client.send_message(chat_id, "📋 Available commands:\n" + "\n".join(commands))
                     logger.info(f"Command suggestions sent for chat {chat_id}")
                 except Exception as e:
-                    logger.error(f"Error handling / command: {e}")
+                    logger.error(f"Error handling / command in chat {chat_id}: {str(e)}")
                 return
             if user_message_lower == '/start':
                 try:
@@ -357,7 +372,7 @@ async def handler(event):
                     await client.send_message(chat_id, "✅  😎", reply_to=event.id)
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
-                    logger.error(f"Error handling /start command: {e}")
+                    logger.error(f"Error handling /start command in chat {chat_id}: {str(e)}")
                 return
             if user_message_lower == '/stop':
                 try:
@@ -365,7 +380,7 @@ async def handler(event):
                     await client.send_message(chat_id, "✅  🛑", reply_to=event.id)
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
-                    logger.error(f"Error handling /stop command: {e}")
+                    logger.error(f"Error handling /stop command in chat {chat_id}: {str(e)}")
                 return
             if user_message_lower == '/online':
                 try:
@@ -374,7 +389,7 @@ async def handler(event):
                     await client.send_message(chat_id, "✅", reply_to=event.id)
                     logger.info("Online command executed")
                 except Exception as e:
-                    logger.error(f"Error handling /online command: {e}")
+                    logger.error(f"Error handling /online command in chat {chat_id}: {str(e)}")
                 return
             if user_message_lower == '/offline':
                 try:
@@ -383,7 +398,7 @@ async def handler(event):
                     await client.send_message(chat_id, "✅", reply_to=event.id)
                     logger.info("Offline command executed")
                 except Exception as e:
-                    logger.error(f"Error handling /offline command: {e}")
+                    logger.error(f"Error handling /offline command in chat {chat_id}: {str(e)}")
                 return
             if user_message_lower == '/del':
                 try:
@@ -397,7 +412,7 @@ async def handler(event):
                     await event.delete()
                     logger.info(f"Delete command executed for chat {chat_id}")
                 except Exception as e:
-                    logger.error(f"Delete error: {e}")
+                    logger.error(f"Delete error in chat {chat_id}: {str(e)}")
                     await client.send_message(chat_id, "❌ Delete mein thodi dikkat aayi, baad mein try karo!")
                 return
 
@@ -425,7 +440,7 @@ async def handler(event):
                     await client.send_message(admin_id, f"🚫 User {sender_id} muted for spamming in chat {chat_id} (>10 messages in 1 min).")
                     logger.info(f"User {sender_id} muted for spamming in chat {chat_id}")
                 except Exception as e:
-                    logger.error(f"Error sending mute message: {e}")
+                    logger.error(f"Error sending mute message in chat {chat_id}: {str(e)}")
                 return
         else:
             user_message_count[sender_id] = {'count': 1, 'first_message_time': current_time}
@@ -549,20 +564,38 @@ async def handler(event):
                     await event.respond(f"✅ 1 Year selected bhai! {price} padega, full year guarantee on your mail/number. Confirm karo (haa/ok/krde).")
                     return
 
-            # Normal AI conversation
-            messages_for_gpt = [{"role": "system", "content": system_prompt}] + user_context[sender_id]
+            # Normal AI conversation with retry logic
+            max_retries = 3
+            retry_delay = 2  # seconds
+            for attempt in range(max_retries):
+                try:
+                    messages_for_gpt = [{"role": "system", "content": system_prompt}] + user_context[sender_id]
 
-            response = openai.chat.completions.create(
-                model="gpt-4o",
-                messages=messages_for_gpt,
-                temperature=0.5,
-            )
+                    response = openai.chat.completions.create(
+                        model="gpt-4o",
+                        messages=messages_for_gpt,
+                        temperature=0.5,
+                    )
 
-            bot_reply = response.choices[0].message.content
+                    bot_reply = response.choices[0].message.content
 
-            user_context[sender_id].append({"role": "assistant", "content": bot_reply})
+                    user_context[sender_id].append({"role": "assistant", "content": bot_reply})
 
-            await event.respond(bot_reply)
+                    await event.respond(bot_reply)
+                    break  # Success, exit the retry loop
+
+                except OpenAIError as e:
+                    logger.error(f"OpenAI API error on attempt {attempt + 1}/{max_retries} in chat {chat_id}: {str(e)}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying after {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error("Max retries reached for OpenAI API call, sending fallback response.")
+                        await event.respond("Bhai thoda error aagaya 😔 Try later.")
+                except Exception as e:
+                    logger.error(f"Unexpected error in AI response processing in chat {chat_id}: {str(e)}")
+                    await event.respond("Bhai thoda error aagaya 😔 Try later.")
+                    break
 
         except Exception as e:
             logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}")
@@ -583,6 +616,10 @@ try:
     client.loop.create_task(reconnect())
     client.loop.create_task(manage_sessions())
     client.run_until_disconnected()
+except AuthKeyDuplicatedError as e:
+    logger.error(f"AuthKeyDuplicatedError: {str(e)}")
+    logger.error("Please generate a new session file as the current one is invalid due to duplicate usage.")
+    raise
 except Exception as e:
     logger.error(f"Error starting Telegram client: {e}")
     raise
