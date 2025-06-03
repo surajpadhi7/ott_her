@@ -294,7 +294,7 @@ async def handler(event):
                     message_ids = [msg.id for msg in messages]
                     if message_ids:
                         await client.delete_messages(chat_id, message_ids)
-                        await client.send_message(chat_id,)
+                        await client.send_message(chat_id,"Deleted")
                     else:
                         await client.send_message(chat_id, "No messages found to delete")
                     await event.delete()
