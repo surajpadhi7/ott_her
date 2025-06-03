@@ -10,7 +10,6 @@ from telethon.errors import AuthKeyDuplicatedError
 from openai import OpenAI
 from openai import OpenAIError
 from dotenv import load_dotenv
-import aiohttp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
