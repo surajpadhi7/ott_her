@@ -7,6 +7,7 @@ import logging
 from telethon import TelegramClient, events, functions, types
 from openai import OpenAI
 from dotenv import load_dotenv
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -167,6 +168,37 @@ async def send_typing(event):
     except Exception as e:
         logger.error(f"Typing error in chat {event.chat_id}: {str(e)}")
 
+# --- Check if message is in English ---
+def is_english(text):
+    try:
+        # Simple heuristic: check if most characters are ASCII and contain English-like words
+        ascii_ratio = sum(1 for c in text if ord(c) < 128) / len(text)
+        words = text.lower().split()
+        english_words = ['hello', 'hi', 'thanks', 'please', 'sorry', 'okay', 'yes', 'no', 'and', 'what', 'how']
+        has_english = any(word in english_words for word in words)
+        return ascii_ratio > 0.8 and has_english
+    except:
+        return False
+
+# --- Correct English Message using GPT-4o ---
+async def correct_english_message(event, user_message):
+    try:
+        correction_prompt = f"Correct the following English message for spelling and grammar mistakes while maintaining its original tone and intent:\n\n{user_message}\n\nProvide only the corrected message without any additional text."
+        response = await call_openai([
+            {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in English messages."},
+            {"role": "user", "content": correction_prompt}
+        ])
+        corrected_message = response.choices[0].message.content.strip()
+        await event.delete()
+        await client.send_message(event.chat_id, corrected_message)
+        logger.info(f"English message corrected: '{user_message}' to '{corrected_message}'")
+        return True
+    except Exception as e:
+        logger.error(f"Error correcting English message in chat {event.chat_id}: {str(e)}")
+        await event.delete()
+        await client.send_message(event.chat_id, user_message)
+        return False
+
 # --- Keep Always Online ---
 async def keep_online():
     while True:
@@ -239,12 +271,26 @@ async def handler(event):
 
         logger.info(f"Message {'sent' if event.out else 'received'}, sender_id: {sender_id}, chat_id: {chat_id}, admin_id: {admin_id}, message: {user_message}, ai_active_chats: {ai_active_chats}, force_online: {force_online}")
 
+        # Handle admin messages
+        if sender_id == admin_id and user_message:
+            # Check if message is in English for correction
+            if is_english(user_message):
+                await correct_english_message(event, user_message)
+                return
+            else:
+                # Non-English admin messages are sent as-is after deleting original
+                await event.delete()
+                await client.send_message(chat_id, user_message)
+                return
+
+        # Handle admin commands
         if sender_id == admin_id:
             logger.info(f"Admin command detected: {user_message.lower()}")
             user_message_lower = user_message.lower()
             if user_message_lower == '/':
                 try:
                     await client.send_message(chat_id, "Available commands:\n" + "\n".join(commands))
+                    await event.delete()
                     logger.info(f"Command suggestions sent for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling / command: {e}")
@@ -253,6 +299,7 @@ async def handler(event):
                 try:
                     ai_active_chats[chat_id] = True
                     await client.send_message(chat_id, "AI started", reply_to=event.id)
+                    await event.delete()
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /start command: {e}")
@@ -261,6 +308,7 @@ async def handler(event):
                 try:
                     ai_active_chats[chat_id] = False
                     await client.send_message(chat_id, "AI stopped", reply_to=event.id)
+                    await event.delete()
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /stop command: {e}")
@@ -270,6 +318,7 @@ async def handler(event):
                     force_online = True
                     ai_active_chats[chat_id] = True
                     await client.send_message(chat_id, "Bot online", reply_to=event.id)
+                    await event.delete()
                     logger.info("Online command executed")
                 except Exception as e:
                     logger.error(f"Error handling /online command: {e}")
@@ -279,6 +328,7 @@ async def handler(event):
                     force_online = False
                     ai_active_chats[chat_id] = False
                     await client.send_message(chat_id, "Bot offline", reply_to=event.id)
+                    await event.delete()
                     logger.info("Offline command executed")
                 except Exception as e:
                     logger.error(f"Error handling /offline command: {e}")
