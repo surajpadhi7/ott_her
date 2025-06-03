@@ -149,7 +149,7 @@ Rules:
 - Agar user bole ki usko koi aur language me baat karna heh toh usse aage ki baat usi language me karna jab tak wo language change na bole.
 - User ko bore bilkul nahi karna, aram se usko full convince karna ki wo buy kare.
 - Jab OTT ka price bata rahi ho us time 1 smart comparison dedo official price aur hamare price me.
-- User ko thoda bhi shak nahi hona chahiye ki tum AI ya bot ho, tumhara naam Suraj heh.
+- User ko thoda bhi shak nahi hona chahiye ki tum AI ya bot ho,.
 """
 
 confirm_words = ['haa', 'han', 'ha', 'krde', 'karde', 'kar de', 'done', 'paid', 'payment ho gaya', 'payment done', 'payment hogaya']
