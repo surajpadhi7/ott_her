@@ -1,3 +1,4 @@
+```python
 import asyncio
 import random
 import json
@@ -5,18 +6,18 @@ import time
 import os
 import logging
 from telethon import TelegramClient, events, functions, types
+from telethon.errors import TypeNotFoundError
 from openai import OpenAI
 from dotenv import load_dotenv
-import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load .env file for local development
+# Load .env file
 load_dotenv()
 
-# --- Load from environment variables ---
+# --- Load environment variables ---
 try:
     api_id = os.getenv('API_ID')
     api_hash = os.getenv('API_HASH')
@@ -171,7 +172,6 @@ async def send_typing(event):
 # --- Check if message is in English ---
 def is_english(text):
     try:
-        # Simple heuristic: check if most characters are ASCII and contain English-like words
         ascii_ratio = sum(1 for c in text if ord(c) < 128) / len(text)
         words = text.lower().split()
         english_words = ['hello', 'hi', 'thanks', 'please', 'sorry', 'okay', 'yes', 'no', 'and', 'what', 'how']
@@ -192,12 +192,12 @@ async def correct_english_message(event, user_message):
         await event.delete()
         await client.send_message(event.chat_id, corrected_message)
         logger.info(f"English message corrected: '{user_message}' to '{corrected_message}'")
-        return True
+        return corrected_message
     except Exception as e:
         logger.error(f"Error correcting English message in chat {event.chat_id}: {str(e)}")
         await event.delete()
         await client.send_message(event.chat_id, user_message)
-        return False
+        return user_message
 
 # --- Keep Always Online ---
 async def keep_online():
@@ -231,9 +231,12 @@ async def manage_sessions():
         for session in sessions.authorizations:
             logger.info(f"Session: IP={session.ip}, Device={session.device_model}, App={session.app_name}, Date={session.date_created}")
             if session.ip != os.getenv('CURRENT_IP', 'unknown') and session.app_name != "userbot":
-                await client(functions.account.ResetAuthorizationRequest(hash=session.hash))
-                logger.info(f"Terminated session: IP={session.ip}, Device={session.device_model}")
-                await client.send_message(admin_id, f"Terminated session from IP {session.ip} (Device: {session.device_model}) due to IP change.")
+                try:
+                    await client(functions.account.ResetAuthorizationRequest(hash=session.hash))
+                    logger.info(f"Terminated session: IP={session.ip}, Device={session.device_model}")
+                    await client.send_message(admin_id, f"Terminated session from IP {session.ip} (Device: {session.device_model}) due to IP change.")
+                except Exception as e:
+                    logger.error(f"Error terminating session IP={session.ip}: {e}")
     except Exception as e:
         logger.error(f"Error managing sessions: {e}")
 
@@ -252,7 +255,7 @@ async def call_openai(messages):
             )
             return response
         except Exception as e:
-            logger.error(f"OpenAI API error (attempt {attempt+1}): {str(e)}, Response: {getattr(e, 'response', 'No response')}")
+            logger.error(f"OpenAI API error (attempt {attempt+1}): {str(e)}")
             if attempt < retries - 1:
                 await asyncio.sleep(2)
             else:
@@ -273,15 +276,12 @@ async def handler(event):
 
         # Handle admin messages
         if sender_id == admin_id and user_message:
-            # Check if message is in English for correction
             if is_english(user_message):
-                await correct_english_message(event, user_message)
-                return
+                user_message = await correct_english_message(event, user_message)
             else:
-                # Non-English admin messages are sent as-is after deleting original
                 await event.delete()
                 await client.send_message(chat_id, user_message)
-                return
+            return
 
         # Handle admin commands
         if sender_id == admin_id:
@@ -298,7 +298,7 @@ async def handler(event):
             if user_message_lower == '/start':
                 try:
                     ai_active_chats[chat_id] = True
-                    await client.send_message(chat_id, "AI started", reply_to=event.id)
+                    await client.send_message(chat_id, "AI started")
                     await event.delete()
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
@@ -307,7 +307,7 @@ async def handler(event):
             if user_message_lower == '/stop':
                 try:
                     ai_active_chats[chat_id] = False
-                    await client.send_message(chat_id, "AI stopped", reply_to=event.id)
+                    await client.send_message(chat_id, "AI stopped")
                     await event.delete()
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
@@ -317,7 +317,7 @@ async def handler(event):
                 try:
                     force_online = True
                     ai_active_chats[chat_id] = True
-                    await client.send_message(chat_id, "Bot online", reply_to=event.id)
+                    await client.send_message(chat_id, "Bot online")
                     await event.delete()
                     logger.info("Online command executed")
                 except Exception as e:
@@ -327,7 +327,7 @@ async def handler(event):
                 try:
                     force_online = False
                     ai_active_chats[chat_id] = False
-                    await client.send_message(chat_id, "Bot offline", reply_to=event.id)
+                    await client.send_message(chat_id, "Bot offline")
                     await event.delete()
                     logger.info("Offline command executed")
                 except Exception as e:
@@ -491,8 +491,14 @@ Validity: {plan['validity']}
             user_context[sender_id].append({"role": "assistant", "content": bot_reply})
             await event.respond(bot_reply)
 
+        except TypeNotFoundError as e:
+            logger.error(f"TypeNotFoundError in chat {chat_id}: {str(e)}")
+            await client.disconnect()
+            await asyncio.sleep(5)
+            await client.connect()
+            await event.respond("Error processing message, reconnected. Try again.")
         except Exception as e:
-            logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}, Response: {getattr(e, 'response', 'No response')}")
+            logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}")
             try:
                 if rules:
                     await event.respond(list(rules.values())[0])
@@ -513,6 +519,11 @@ try:
     client.loop.create_task(reconnect())
     client.loop.create_task(manage_sessions())
     client.run_until_disconnected()
+except TypeNotFoundError as e:
+    logger.error(f"TypeNotFoundError starting Telegram client: {str(e)}")
+    client.disconnect()
+    client.start()
 except Exception as e:
     logger.error(f"Error starting Telegram client: {e}")
     raise
+```
