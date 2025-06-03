@@ -253,7 +253,7 @@ async def handler(event):
             if user_message_lower == '/start':
                 try:
                     ai_active_chats[chat_id] = True
-                    await client.send_message(chat_id, "AI started")
+                    await client.send_message(chat_id, "started")
                     await event.delete()
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
@@ -262,7 +262,7 @@ async def handler(event):
             if user_message_lower == '/stop':
                 try:
                     ai_active_chats[chat_id] = False
-                    await client.send_message(chat_id, "AI stopped")
+                    await client.send_message(chat_id, "stopped")
                     await event.delete()
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
@@ -272,7 +272,7 @@ async def handler(event):
                 try:
                     force_online = True
                     ai_active_chats[chat_id] = True
-                    await client.send_message(chat_id, "Bot online")
+                    await client.send_message(chat_id, "online")
                     await event.delete()
                     logger.info("Online command executed")
                 except Exception as e:
@@ -282,7 +282,7 @@ async def handler(event):
                 try:
                     force_online = False
                     ai_active_chats[chat_id] = False
-                    await client.send_message(chat_id, "Bot offline")
+                    await client.send_message(chat_id, "offline")
                     await event.delete()
                     logger.info("Offline command executed")
                 except Exception as e:
@@ -294,7 +294,7 @@ async def handler(event):
                     message_ids = [msg.id for msg in messages]
                     if message_ids:
                         await client.delete_messages(chat_id, message_ids)
-                        await client.send_message(chat_id, "All messages deleted")
+                        await client.send_message(chat_id,)
                     else:
                         await client.send_message(chat_id, "No messages found to delete")
                     await event.delete()
@@ -403,7 +403,7 @@ Validity: {plan['validity']}
                     del user_confirm_pending[sender_id]
                     return
 
-            products = ["netflix", "prime", "hotstar", "sony", "zee5", "voot", "mx player", "ullu", "hoichoi", "eros", "jio", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
+            products = ["netflix do", "prime do", "hotstar do", "sony do", "zee5", "voot do", "mx player", "ullu", "hoichoi", "eros", "jio", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
             matched = [p for p in user_message.lower().split() if p in products]
 
             if matched and sender_id not in user_confirm_pending:
