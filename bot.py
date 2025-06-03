@@ -24,7 +24,6 @@ try:
     GROUP_ID = os.getenv('GROUP_ID')
     openai_api_key = os.getenv('OPENAI_API_KEY')
     
-    # Validate all required variables
     required_vars = {
         'API_ID': api_id,
         'API_HASH': api_hash,
@@ -37,7 +36,6 @@ try:
         logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
         raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
     
-    # Convert string IDs to integers
     try:
         api_id = int(api_id)
         admin_id = int(admin_id)
@@ -81,75 +79,34 @@ except Exception as e:
 user_context = {}
 user_confirm_pending = {}
 user_selected_product = {}
-ai_active_chats = {}  # Chat-specific AI status
-force_online = False  # Tracks /online or /offline state
-user_warnings = {}  # Tracks abuse warnings per user
-user_message_count = {}  # Tracks message count for spam detection
-muted_users = set()  # Tracks muted users
+ai_active_chats = {}
+force_online = False
+user_warnings = {}
+user_message_count = {}
+muted_users = set()
+grammar_correction_active = False
 
 # --- Abuse Words (Hindi + English) ---
 abuse_words = [
-    # English
     "fuck", "shit", "bitch", "asshole", "bastard", "dick", "piss", "cunt", "fucker", "motherfucker",
-    # Hindi
     "chutiya", "madarchod", "bhenchod", "gandu", "harami", "kutta", "sala", "randi", "bhosdi", "lodu",
     "maa ki chut", "bhosda", "chut", "gaand", "lavda", "bhadwa", "jhatu", "tatti", "suar", "kutiya"
 ]
 
 # --- Short Form Corrections ---
 short_form_corrections = {
-    "kr": "kar",
-    "plz": "please",
-    "pls": "please",
-    "thx": "thanks",
-    "thnx": "thanks",
-    "u": "you",
-    "r": "are",
-    "k": "okay",
-    "ok": "okay",
-    "bhai": "bhai",
-    "bhy": "bhai",
-    "kya": "kya",
-    "kyu": "kyun",
-    "tym": "time",
-    "msg": "message",
-    "bro": "bhai",
-    "sis": "didi",
-    "dnt": "dont",
-    "wnt": "want",
-    "gud": "good",
-    "n": "and",
-    "2": "to",
-    "4": "for"
+    "kr": "kar", "plz": "please", "pls": "please", "thx": "thanks", "thnx": "thanks", "u": "you",
+    "r": "are", "k": "okay", "ok": "okay", "bhai": "bhai", "bhy": "bhai", "kya": "kya", "kyu": "kyun",
+    "tym": "time", "msg": "message", "bro": "bhai", "sis": "didi", "dnt": "dont", "wnt": "want",
+    "gud": "good", "n": "and", "2": "to", "4": "for"
 }
 
 # --- Hindi/Hinglish Spelling Corrections ---
 hindi_corrections = {
-    "kese": "kaise",
-    "kesa": "kaisa",
-    "kyo": "kyun",
-    "bhy": "bhai",
-    "didi": "didi",
-    "shukriya": "shukriya",
-    "dhanyavaad": "dhanyavaad",
-    "meharbani": "meharbani",
-    "plz": "please",
-    "thx": "thanks",
-    "sry": "sorry",
-    "srry": "sorry",
-    "oky": "okay",
-    "okk": "okay",
-    "ky": "kya",
-    "kyu": "kyun",
-    "bht": "bahut",
-    "bohot": "bahut",
-    "thik": "theek",
-    "tik": "theek",
-    "h": "hai",
-    "hn": "haan",
-    "nahi": "nahi",
-    "nhi": "nahi",
-    "ache": "achha",
+    "kese": "kaise", "kesa": "kaisa", "kyo": "kyun", "bhy": "bhai", "didi": "didi", "shukriya": "shukriya",
+    "dhanyavaad": "dhanyavaad", "meharbani": "meharbani", "plz": "please", "thx": "thanks", "sry": "sorry",
+    "srry": "sorry", "oky": "okay", "okk": "okay", "ky": "kya", "kyu": "kyun", "bht": "bahut", "bohot": "bahut",
+    "thik": "theek", "tik": "theek", "h": "hai", "hn": "haan", "nahi": "nahi", "nhi": "nahi", "ache": "achha",
     "acha": "achha"
 }
 
@@ -161,8 +118,8 @@ english_common_words = [
 ]
 
 # --- Spam Detection Config ---
-spam_threshold = 10  # Max messages in time window
-spam_time_window = 60  # Time window in seconds
+spam_threshold = 10
+spam_time_window = 60
 
 # --- Available Commands ---
 commands = [
@@ -170,7 +127,9 @@ commands = [
     "/stop - AI replies band kare is chat mein",
     "/online - Bot sab chats mein reply kare",
     "/offline - Bot AI replies band kare",
-    "/del - Is chat ke saare messages delete kare"
+    "/del - Is chat ke saare messages delete kare",
+    "/c - Grammar correction aur Hindi/Hinglish correction on kare",
+    "/s - Grammar correction aur Hindi/Hinglish correction off kare"
 ]
 
 # --- SYSTEM PROMPT ---
@@ -259,30 +218,17 @@ async def add_reaction(event, reaction_type):
 # --- Correct Admin Message using GPT-4o ---
 async def correct_admin_message(event, user_message):
     try:
-        # Use GPT-4o to correct spelling and grammar
         correction_prompt = f"Correct the following message for spelling and grammar mistakes while maintaining its original tone and intent:\n\n{user_message}\n\nProvide only the corrected message without any additional text."
-        
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in messages."},
-                {"role": "user", "content": correction_prompt}
-            ],
-            temperature=0.0,
-        )
-        
+        response = await call_openai([
+            {"role": "system", "content": "You are a helpful assistant that corrects spelling and grammar in messages."},
+            {"role": "user", "content": correction_prompt}
+        ])
         corrected_message = response.choices[0].message.content.strip()
-        
-        # Delete the original message
         await event.delete()
-        
-        # Send the corrected message
         await client.send_message(event.chat_id, corrected_message)
         logger.info(f"Admin message corrected: '{user_message}' to '{corrected_message}'")
-        
     except Exception as e:
         logger.error(f"Error correcting admin message in chat {event.chat_id}: {str(e)}")
-        # Fallback: don't delete or correct if GPT-4o fails
         await client.send_message(event.chat_id, user_message)
 
 # --- Keep Always Online ---
@@ -307,7 +253,7 @@ async def reconnect():
                 logger.debug("Client is already connected")
         except Exception as e:
             logger.error(f"Error during reconnect: {e}")
-        await asyncio.sleep(60)  # Check every minute
+        await asyncio.sleep(60)
 
 # --- Manage Sessions ---
 async def manage_sessions():
@@ -323,10 +269,31 @@ async def manage_sessions():
     except Exception as e:
         logger.error(f"Error managing sessions: {e}")
 
+# --- OpenAI Retry Logic ---
+async def call_openai(messages):
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: openai.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    temperature=0.5,
+                )
+            )
+            return response
+        except Exception as e:
+            logger.error(f"OpenAI API error (attempt {attempt+1}): {str(e)}, Response: {getattr(e, 'response', 'No response')}")
+            if attempt < retries - 1:
+                await asyncio.sleep(2)
+            else:
+                raise
+
 # --- Message Handler ---
 @client.on(events.NewMessage())
 async def handler(event):
-    global force_online
+    global force_online, grammar_correction_active
 
     try:
         sender = await event.get_sender()
@@ -336,11 +303,9 @@ async def handler(event):
 
         logger.info(f"Message {'sent' if event.out else 'received'}, sender_id: {sender_id}, chat_id: {chat_id}, admin_id: {admin_id}, message: {user_message}, ai_active_chats: {ai_active_chats}, force_online: {force_online}")
 
-        # Correct admin messages (independent of AI status)
         if sender_id == admin_id and user_message:
             await correct_admin_message(event, user_message)
 
-        # Handle admin commands
         if sender_id == admin_id:
             logger.info(f"Admin command detected: {user_message.lower()}")
             user_message_lower = user_message.lower()
@@ -354,7 +319,7 @@ async def handler(event):
             if user_message_lower == '/start':
                 try:
                     ai_active_chats[chat_id] = True
-                    await client.send_message(chat_id, "✅  😎", reply_to=event.id)
+                    await client.send_message(chat_id, "✅ 😎", reply_to=event.id)
                     logger.info(f"StartAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /start command: {e}")
@@ -362,7 +327,7 @@ async def handler(event):
             if user_message_lower == '/stop':
                 try:
                     ai_active_chats[chat_id] = False
-                    await client.send_message(chat_id, "✅  🛑", reply_to=event.id)
+                    await client.send_message(chat_id, "✅ 🛑", reply_to=event.id)
                     logger.info(f"StopAI executed for chat {chat_id}")
                 except Exception as e:
                     logger.error(f"Error handling /stop command: {e}")
@@ -400,18 +365,31 @@ async def handler(event):
                     logger.error(f"Delete error: {e}")
                     await client.send_message(chat_id, "❌ Delete mein thodi dikkat aayi, baad mein try karo!")
                 return
+            if user_message_lower == '/c':
+                try:
+                    grammar_correction_active = True
+                    await client.send_message(chat_id, "✅ Grammar aur Hindi/Hinglish correction ON kar diya!", reply_to=event.id)
+                    logger.info(f"Grammar correction activated for chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"Error handling /c command: {e}")
+                return
+            if user_message_lower == '/s':
+                try:
+                    grammar_correction_active = False
+                    await client.send_message(chat_id, "✅ Grammar aur Hindi/Hinglish correction OFF kar diya!", reply_to=event.id)
+                    logger.info(f"Grammar correction deactivated for chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"Error handling /s command: {e}")
+                return
 
-        # Skip processing for outgoing messages
         if event.out:
             logger.info("Skipping outgoing message")
             return
 
-        # Check if user is muted
         if sender_id in muted_users:
             logger.info(f"User {sender_id} is muted, ignoring message")
             return
 
-        # Spam Detection (works regardless of AI status)
         current_time = time.time()
         if sender_id not in user_message_count:
             user_message_count[sender_id] = {'count': 0, 'first_message_time': current_time}
@@ -430,7 +408,35 @@ async def handler(event):
         else:
             user_message_count[sender_id] = {'count': 1, 'first_message_time': current_time}
 
-        # Abuse Detection (works regardless of AI status)
+        # Apply grammar correction if active
+        corrected_message = user_message
+        if grammar_correction_active and user_message and not event.out:
+            try:
+                # Apply short form corrections
+                for short, full in short_form_corrections.items():
+                    corrected_message = corrected_message.replace(f" {short} ", f" {full} ")
+                
+                # Apply Hindi/Hinglish corrections
+                for wrong, right in hindi_corrections.items():
+                    corrected_message = corrected_message.replace(f" {wrong} ", f" {right} ")
+                
+                # Check for close matches with English common words
+                words = corrected_message.split()
+                for i, word in enumerate(words):
+                    matches = difflib.get_close_matches(word.lower(), english_common_words, n=1, cutoff=0.8)
+                    if matches:
+                        words[i] = matches[0]
+                corrected_message = " ".join(words)
+                
+                # If message was corrected, replace original
+                if corrected_message != user_message:
+                    await event.delete()
+                    await client.send_message(chat_id, corrected_message)
+                    logger.info(f"Message corrected: '{user_message}' to '{corrected_message}'")
+                    user_message = corrected_message
+            except Exception as e:
+                logger.error(f"Error applying grammar correction in chat {chat_id}: {str(e)}")
+
         message_words = user_message.lower().split()
         for word in message_words:
             if word in abuse_words or difflib.get_close_matches(word, abuse_words, n=1, cutoff=0.8):
@@ -464,7 +470,6 @@ async def handler(event):
                             logger.error(f"Error sending block/delete error message in chat {chat_id}: {str(send_err)}")
                 return
 
-        # Check for rules-based triggers (from rules.json)
         logger.info("Checking rules-based triggers")
         for trigger, reply in rules.items():
             logger.debug(f"Checking trigger: {trigger}")
@@ -478,12 +483,10 @@ async def handler(event):
                 return
         logger.info("No rules-based trigger matched")
 
-        # If chat is not active and not in force_online mode, ignore non-admin incoming messages for AI responses
         if not ai_active_chats.get(chat_id, False) and not force_online:
             logger.info(f"AI inactive for chat {chat_id} and not forced online, ignoring non-admin incoming message for AI response")
             return
 
-        # Process non-admin incoming messages for AI response
         logger.info("Processing non-admin message for AI response")
         try:
             await send_typing(event)
@@ -491,31 +494,23 @@ async def handler(event):
             logger.error(f"Error in send_typing in chat {chat_id}: {str(e)}")
 
         try:
-            # Confirm Handling
             if any(word in user_message.lower() for word in confirm_words):
                 if sender_id in user_confirm_pending:
                     plan = user_confirm_pending[sender_id]
                     user_link = f'<a href="tg://user?id={sender_id}">{sender.first_name}</a>'
-
                     post_text = f"""
 ✅ New Payment Confirmation!
-
 👤 User: {user_link}
 🎯 Subscription: {plan['product']}
 💰 Amount: {plan['price']}
 ⏳ Validity: {plan['validity']}
 """
-                    await client.send_message(
-                        GROUP_ID,
-                        post_text,
-                        parse_mode='html'
-                    )
+                    await client.send_message(GROUP_ID, post_text, parse_mode='html')
                     await event.respond("✅ Payment Confirmed! QR code generate ho raha hai 📲")
                     del user_confirm_pending[sender_id]
                     return
 
-            # Product detection from user message
-            products = ["netflix do", "prime do", "hotstar do", "sony do", "zee5 do", "voot do", "mx player do", "ullu do", "hoichoi do", "eros do", "jio do", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
+            products = ["netflix", "prime", "hotstar", "sony", "zee5", "voot", "mx player", "ullu", "hoichoi", "eros", "jio", "discovery", "shemaroo", "alt", "sun", "aha", "youtube", "telegram", "chatgpt", "adult", "hack", "bgmi", "falcone", "vision", "lethal", "titan", "shoot360", "win", "ioszero"]
             matched = [p for p in user_message.lower().split() if p in products]
 
             if matched and sender_id not in user_confirm_pending:
@@ -524,7 +519,6 @@ async def handler(event):
                 await event.respond(f"✅ {selected_product} ke liye kitni validity chahiye bhai? 6 months ya 1 year?")
                 return
 
-            # Validity handling
             if "6 month" in user_message.lower() or "6 months" in user_message.lower():
                 if sender_id in user_selected_product:
                     product = user_selected_product[sender_id]
@@ -549,25 +543,23 @@ async def handler(event):
                     await event.respond(f"✅ 1 Year selected bhai! {price} padega, full year guarantee on your mail/number. Confirm karo (haa/ok/krde).")
                     return
 
-            # Normal AI conversation
+            if sender_id not in user_context:
+                user_context[sender_id] = []
+            user_context[sender_id].append({"role": "user", "content": user_message})
             messages_for_gpt = [{"role": "system", "content": system_prompt}] + user_context[sender_id]
 
-            response = openai.chat.completions.create(
-                model="gpt-4o",
-                messages=messages_for_gpt,
-                temperature=0.5,
-            )
-
+            response = await call_openai(messages_for_gpt)
             bot_reply = response.choices[0].message.content
-
             user_context[sender_id].append({"role": "assistant", "content": bot_reply})
-
             await event.respond(bot_reply)
 
         except Exception as e:
-            logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}")
+            logger.error(f"Error in AI response processing in chat {chat_id}: {str(e)}, Response: {getattr(e, 'response', 'No response')}")
             try:
-                await event.respond("Bhai thoda error aagaya 😔 Try later.")
+                if rules:
+                    await event.respond(list(rules.values())[0])
+                else:
+                    await event.respond("Bhai thoda error aagaya 😔 Thodi der baad try kar.")
             except Exception as send_err:
                 logger.error(f"Error sending AI error message in chat {chat_id}: {str(send_err)}")
 
